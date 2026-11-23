@@ -11,9 +11,14 @@
 ;   assombri, sauf sous l'ombre du héros.
 ; - Le héros : un sprite de 2 x 4 tiles (ligne 2), dirigé à la croix, saut
 ;   avec A, B ou C. Sa priorité vient de la table du convertisseur
-;   (prio.bin) : haute s'il est devant tout ce qui le recouvre.
+;   (posinfo.bin) : basse si le plan A qui le recouvre est devant lui,
+;   haute s'il est derrière.
 ; - Son ombre : un sprite de 2 x 1 tiles, couleur 15 de la ligne 3
 ;   (l'opérateur d'ombre), posée sur le sol sous lui.
+; - Les masques : quand le plan A qui recouvre le héros (ou son ombre) est
+;   en partie devant et en partie derrière, les sprites passent en priorité
+;   haute, et des sprites de 8 x 8 (masks.bin), placés avant eux dans la
+;   liste, recopient par-dessus les pixels du décor qui sont devant.
 ; - La caméra suit le héros ; tout est écrit dans le VDP pendant la V_INT.
 ;
 ; Repère du monde (voir tools/conv.h) : u = 16 i, v = 16 j, w = 16 k ;
@@ -71,7 +76,10 @@ padNow		RS.W	1		; boutons enfoncés (1 = enfoncé) : SACBRLDU
 padPrev		RS.W	1
 camX		RS.W	1
 camY		RS.W	1
-sprBuf		RS.W	8		; deux entrées de la table des sprites
+heroInfo	RS.W	1		; posinfo du héros et de l'ombre
+shadowInfo	RS.W	1
+sprCount	RS.W	1		; entrées dans sprBuf
+sprBuf		RS.B	8*(2*MAX_MASKS+2)	; la table des sprites
 vblank		RS.B	1		; mis à 1 par la V_INT
 		RS.B	1
 frameCount	RS.L	1
@@ -201,10 +209,13 @@ V_INT:
 	LEA	(VDP_DATA).L,A1
 	vramw	VRAM_SPRITES
 	LEA	(sprBuf).L,A0
-	MOVE.L	(A0)+,(A1)
-	MOVE.L	(A0)+,(A1)
-	MOVE.L	(A0)+,(A1)
-	MOVE.L	(A0)+,(A1)
+	MOVE.W	(sprCount).L,D0
+	ADD.W	D0,D0			; deux longs par entrée
+	SUBQ.W	#1,D0
+	BMI.S	@nospr
+@spr	MOVE.L	(A0)+,(A1)
+	DBF	D0,@spr
+@nospr
 	vramw	VRAM_HSCROLL
 	MOVE.W	(camX).L,D0
 	NEG.W	D0
@@ -447,52 +458,123 @@ UPDATE_VIEW:
 	MOVE.W	#IMG_H-224,D7
 @cy1	MOVE.W	D7,(camY).L
 
+	; Les positions du héros et de l'ombre dans posinfo.bin
+	MOVE.W	(heroW).L,D2
+	BSR	LOOKUP
+	MOVE.W	D0,(heroInfo).L
+	MOVE.W	#$FFFF,D0
+	MOVE.W	(shadowW).L,D2
+	BMI.S	@noinfo
+	BSR	LOOKUP
+@noinfo	MOVE.W	D0,(shadowInfo).L
+
+	; La liste des sprites : les masques d'abord (devant), puis le héros,
+	; puis l'ombre
 	LEA	(sprBuf).L,A0
+	CLR.W	(sprCount).L
+	MOVE.W	(heroInfo).L,D0
+	BSR	EMIT_MASKS
+	MOVE.W	(shadowInfo).L,D0
+	CMP.W	(heroInfo).L,D0
+	BEQ.S	@same
+	BSR	EMIT_MASKS
+@same
 	; Le héros : sprite 2 x 4, pieds à la ligne 30
+	MOVE.W	(heroW).L,D2
 	MOVE.W	D5,D3
 	SUB.W	D2,D3
 	SUB.W	D7,D3
 	ADDI.W	#128-30,D3
 	MOVE.W	D3,(A0)+		; y
-	MOVE.W	#$0701,(A0)+		; 2 x 4, suivant : 1
-	BSR	PRIORITY		; D2 = w
+	MOVE.W	#$0700,(A0)+		; 2 x 4 (le lien est mis plus bas)
 	MOVE.W	#$4000|TILE_HERO,D3	; ligne 2
-	TST.B	D0
-	BEQ.S	@hlow
-	BSET	#15,D3
-@hlow	MOVE.W	D3,(A0)+
+	MOVE.W	(heroInfo).L,D0
+	BSR	HIGH_BIT
+	OR.W	D0,D3
+	MOVE.W	D3,(A0)+
 	MOVE.W	D4,D3
 	SUB.W	D6,D3
 	ADDI.W	#128-8,D3
 	MOVE.W	D3,(A0)+		; x
+	ADDQ.W	#1,(sprCount).L
 
 	; L'ombre : sprite 2 x 1, centré sur le sol sous les pieds
 	MOVE.W	(shadowW).L,D2
-	BMI.S	@hide
+	BMI.S	@links
 	MOVE.W	D5,D3
 	SUB.W	D2,D3
 	SUB.W	D7,D3
 	ADDI.W	#128-4,D3
 	MOVE.W	D3,(A0)+
-	MOVE.W	#$0400,(A0)+		; 2 x 1, dernier
-	BSR	PRIORITY
+	MOVE.W	#$0400,(A0)+		; 2 x 1
 	MOVE.W	#$6000|TILE_SHADOW,D3	; ligne 3
-	TST.B	D0
-	BEQ.S	@slow
-	BSET	#15,D3
-@slow	MOVE.W	D3,(A0)+
+	MOVE.W	(shadowInfo).L,D0
+	BSR	HIGH_BIT
+	OR.W	D0,D3
+	MOVE.W	D3,(A0)+
 	MOVE.W	D4,D3
 	SUB.W	D6,D3
 	ADDI.W	#128-8,D3
 	MOVE.W	D3,(A0)+
+	ADDQ.W	#1,(sprCount).L
+
+@links	; Les liens : chaque entrée vers la suivante, la dernière vers 0
+	LEA	(sprBuf+3).L,A0
+	MOVE.W	(sprCount).L,D0
+	MOVEQ	#1,D1
+@link	CMP.W	D0,D1
+	BLT.S	@next
+	CLR.B	(A0)			; la dernière
 	RTS
-@hide	MOVE.L	#$00000400,(A0)+	; y = 0 : hors de l'écran
-	CLR.L	(A0)+
+@next	MOVE.B	D1,(A0)
+	ADDQ.L	#8,A0
+	ADDQ.W	#1,D1
+	BRA.S	@link
+
+; HIGH_BIT : D0 = $8000 si le mot de posinfo D0 demande la priorité haute
+HIGH_BIT:
+	CMPI.W	#$FFFF,D0
+	BEQ.S	@low
+	ANDI.W	#$8000,D0
+	RTS
+@low	MOVEQ	#0,D0
 	RTS
 
-; PRIORITY : D0 = 1 si le sprite posé en (heroU, heroV, D2) doit être
-; prioritaire (table prio.bin : bit 0 ; $FF : position impossible, basse)
-PRIORITY:
+; EMIT_MASKS : ajoute à la liste (A0, sprCount) les masques du mot de
+; posinfo D0. Garde D4-D7.
+EMIT_MASKS:
+	CMPI.W	#$FFFF,D0
+	BEQ.S	@out
+	ANDI.W	#$7FFF,D0
+	LEA	DATA_MASKS,A1
+	ADDA.W	D0,A1
+	MOVE.W	(A1)+,D1		; nombre de masques
+	SUBQ.W	#1,D1
+	BMI.S	@out
+@mask	MOVEQ	#0,D0
+	MOVE.B	1(A1),D0		; ty
+	LSL.W	#3,D0
+	SUB.W	D7,D0
+	ADDI.W	#128,D0
+	MOVE.W	D0,(A0)+		; y
+	CLR.W	(A0)+			; 1 x 1 (le lien est mis plus tard)
+	MOVE.W	2(A1),D0
+	ORI.W	#$8000,D0		; prioritaire
+	MOVE.W	D0,(A0)+
+	MOVEQ	#0,D0
+	MOVE.B	(A1),D0			; tx
+	LSL.W	#3,D0
+	SUB.W	D6,D0
+	ADDI.W	#128,D0
+	MOVE.W	D0,(A0)+		; x
+	ADDQ.L	#4,A1
+	ADDQ.W	#1,(sprCount).L
+	DBF	D1,@mask
+@out	RTS
+
+; LOOKUP : D0 = le mot de posinfo.bin pour (heroU, heroV, D2) ; $FFFF
+; hors de la table
+LOOKUP:
 	MOVEM.L	D1-D3/A1,-(SP)
 	MOVE.W	(heroU).L,D0
 	LSR.W	#2,D0			; m
@@ -502,19 +584,16 @@ PRIORITY:
 	ADDQ.W	#8,D3
 	LSR.W	#4,D3			; k, arrondi
 	CMPI.W	#ZONE_H,D3
-	BGE.S	@low
-	MULU	#PRIO_MV,D3
+	BGE.S	@none
+	MULU	#POS_MV,D3
 	ADD.W	D1,D3
-	MULU	#PRIO_MU,D3
+	MULU	#POS_MU,D3
 	ADD.W	D0,D3
-	LEA	DATA_PRIO,A1
-	MOVEQ	#0,D0
-	MOVE.B	(A1,D3.L),D0
-	CMPI.B	#$FF,D0
-	BEQ.S	@low
-	ANDI.B	#1,D0
+	ADD.L	D3,D3
+	LEA	DATA_POSINFO,A1
+	MOVE.W	(A1,D3.L),D0
 	BRA.S	@out
-@low	MOVEQ	#0,D0
+@none	MOVE.W	#$FFFF,D0
 @out	MOVEM.L	(SP)+,D1-D3/A1
 	RTS
 
@@ -555,9 +634,11 @@ DATA_PLANE_B:
 DATA_VOXELS:
 	INCBIN	"build/data/voxels.bin"
 	EVEN
-DATA_PRIO:
-	INCBIN	"build/data/prio.bin"
+DATA_MASKS:
+	INCBIN	"build/data/masks.bin"
 	EVEN
+DATA_POSINFO:
+	INCBIN	"build/data/posinfo.bin"
 	IF	*<$20000		; 128 Ko
 	DCB.B	$20000-*,$FF
 	ENDIF

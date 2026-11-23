@@ -137,3 +137,93 @@ fait.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
 ```
+
+---
+
+L'ombre cachée comme le héros, et des masques pour les conflits
+
+**Ce que fait cette version** :
+- **Correction de l'ombre.** Le convertisseur ne regardait que le
+  rectangle du sprite du héros, qui s'arrête 2 lignes sous ses pieds. Les
+  2 lignes du bas de l'ombre pouvaient donc rester dans le plan B, et
+  l'ombre passait devant une caisse au lieu de derrière. Maintenant, le
+  convertisseur tient compte aussi de l'empreinte de l'ombre (une boîte
+  plate de ± 4 unités, posée au sol, sous un sprite de 16 x 8), pour
+  remplir le plan A et pour classer les positions.
+- **Masques.** Quand le décor du plan A qui recouvre le héros est en
+  partie devant lui et en partie derrière (entre deux colonnes), le bit de
+  priorité ne suffit pas. Les deux sprites passent alors en priorité haute,
+  et des sprites de 8 x 8 recopient par-dessus les pixels du décor qui sont
+  devant eux. Entre sprites, c'est l'ordre de la liste qui décide : les
+  masques sont placés avant le héros et l'ombre, et leur priorité les met
+  devant le plan A.
+  - Un masque reprend le tile du plan A, ou un tile « devant seulement »
+    quand le tile contient aussi des pixels derrière le héros.
+  - Le convertisseur écrit `posinfo.bin` (la priorité et l'adresse de la
+    liste de masques à chaque position) et `masks.bin` (les listes ; deux
+    positions qui ont les mêmes masques partagent leur liste). Ces deux
+    fichiers remplacent `prio.bin`.
+  - La ROM bâtit la table des sprites à chaque image : les masques du
+    héros, ceux de l'ombre (s'ils viennent d'une autre position, pendant un
+    saut), le héros, puis l'ombre. La V_INT recopie le nombre d'entrées
+    utilisé.
+- **Tests.**
+  - `test_rom` vérifie maintenant l'ombre comme le héros : à chaque pixel
+    de son sprite, le décor doit être assombri si et seulement si rien
+    n'est devant elle. Aucune erreur n'est plus tolérée, ni pour le héros
+    ni pour l'ombre, aux positions masquées comme aux autres. Il compte
+    aussi les sprites par ligne (20 au plus).
+  - `test_scene` vérifie la boîte de l'ombre contre le lancer de rayons, et
+    le plan A et le classement avec les deux sprites.
+- **Mac** : `-fno-common` pour Musashi. Ses grandes tables sans valeur
+  initiale allaient en `__common`, que l'éditeur de liens du Mac aligne sur
+  32 Ko, d'où l'avertissement « reducing alignment of section
+  __DATA,__common ». Je n'ai pas pu le vérifier ici, faute de Mac.
+
+**Mesures** (zone de démo) :
+- **Erreurs, mesurées à 1 297 positions sur le banc :**
+
+  | | Avant | Après |
+  |---|---|---|
+  | Ombre | fausse à 115 positions (2 342 pixels) | 0 |
+  | Héros, positions en conflit | faux à 95 sur 115 (3 245 pixels) | 0 |
+
+- **Plan A** : 24 732 pixels au lieu de 23 738 (+ 4,2 %), soit 24,3 % du
+  décor.
+- **Tiles** : 228 pour le décor (au lieu de 227), plus 1 pour les masques
+  (les autres reprennent les tiles du plan A), soit 229 en tout ; marge de
+  1 153 sur le budget.
+- **Positions masquées** : 341 sur 3 864 posées (8,8 %, contre 8,2 % de
+  conflits avant, car l'ombre en ajoute quelques-unes).
+- **Masques** : 6,2 en moyenne par position masquée, 15 au plus, 3 au plus
+  sur une même rangée de tiles. Sur le banc, il y a eu au plus 5 sprites
+  sur une même ligne, pour une limite de 20.
+- **Données** : 289 listes de masques (8 780 octets) ; `posinfo.bin` fait
+  65 280 octets. La ROM tient toujours en 128 Ko.
+- **Cycles par image** : 4 140 à 10 058, soit 3,2 à 7,9 % d'une image NTSC
+  (au lieu de 2,8 à 7,4 %).
+- **BlastEm** : mêmes images que le banc, au pixel près, au départ,
+  derrière la caisse (votre cas) et à deux positions masquées dans la
+  colonnade.
+
+Message de commit proposé :
+
+```
+L'ombre cachée comme le héros, et des masques pour les conflits
+
+Le convertisseur tient compte de l'empreinte de l'ombre (16 x 8, boîte
+plate au sol) pour le plan A et le classement des positions : l'ombre
+ne passe plus devant une caisse (fausse à 115 positions avant, 0 après).
+
+Entre deux colonnes, le bit de priorité ne suffit pas : les sprites
+passent en priorité haute et des masques de 8 x 8, placés avant eux dans
+la liste des sprites, recopient le décor qui est devant (posinfo.bin,
+masks.bin). Héros faux à 95 positions avant, 0 après ; 6,2 masques en
+moyenne, 15 au plus ; 1 tile de plus ; 3,2 à 7,9 % d'une image NTSC.
+
+test_rom vérifie l'ombre comme le héros, sans tolérance. -fno-common
+pour Musashi (avertissement de l'éditeur de liens du Mac).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
+```

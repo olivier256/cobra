@@ -75,21 +75,29 @@ BlastEm). D'où :
   aux palettes. Elle dit où le héros retombera (le défaut de Landstalker).
 
 Le convertisseur range un pixel de décor dans le plan A **si et seulement
-si** il peut cacher le héros à l'une des positions où le héros peut se
-trouver : le pixel est dans le rectangle de son sprite (16 x 32), et son
-voxel est devant la boîte du héros (boîtes séparées le long d'un axe vers
-l'œil ; vérifié contre un lancer de rayons). Positions : tous les 4 unités,
-à chaque niveau, posées sur un voxel ou un niveau au-dessus (saut).
+si** il peut cacher le héros ou son ombre à l'une des positions où le
+héros peut se trouver : le pixel est dans le rectangle d'un des deux
+sprites (16 x 32 pour le héros, 16 x 8 pour l'ombre), et son voxel est
+devant la boîte correspondante (boîtes séparées le long d'un axe vers
+l'œil ; vérifié contre un lancer de rayons). La boîte de l'ombre est plate,
+de la même empreinte que le héros (± 4 unités), posée au sol. Positions :
+tous les 4 unités, à chaque niveau, posées sur un voxel ou un niveau
+au-dessus (saut).
 
-Pour chaque position, `prio.bin` donne la priorité du sprite : basse si les
-pixels du plan A qui le recouvrent sont tous devant lui, haute s'ils sont
-tous derrière. S'il y en a des deux sortes, c'est un **conflit** (le héros
-entre deux colonnes) : un seul bit ne peut pas faire juste ; on prend la
-priorité qui fait le moins de pixels faux, et on le compte. Retirer la
-priorité des tiles derrière lui (l'astuce de Landstalker) les assombrirait
-en mode ombre et surbrillance : exclu. Pistes pour plus tard : découper le
-sprite, redessiner par sprites les quelques pixels du premier plan, ou
-déplacer dans le plan B un objet devant lequel le héros passe.
+Pour chaque position, `posinfo.bin` donne la priorité des deux sprites :
+basse si les pixels du plan A qui les recouvrent sont tous devant eux,
+haute s'ils sont tous derrière. S'il y en a des deux sortes (le héros entre
+deux colonnes), un seul bit ne peut pas faire juste : la position est
+**masquée**. Les sprites passent en priorité haute (devant tout le plan A),
+et des **masques** recopient par-dessus les pixels du décor qui sont devant
+eux : des sprites de 8 x 8, posés sur la grille des tiles, prioritaires,
+placés avant le héros et l'ombre dans la liste des sprites. Entre sprites,
+c'est l'ordre de la liste qui décide : le masque gagne, puis sa priorité le
+met devant le plan A. Un masque reprend le tile du plan A, ou un tile
+« devant seulement » fabriqué par le convertisseur quand le tile contient
+aussi des pixels derrière le héros. Retirer la priorité des tiles derrière
+le héros (une astuce possible sans le mode ombre et surbrillance) les
+assombrirait : exclu.
 
 ## La VRAM
 
@@ -110,7 +118,9 @@ son clone libre). Au démarrage, tout est copié dans le VDP par le
 processeur (pas encore de DMA). À chaque image : la V_INT écrit la table
 des sprites et le défilement ; la boucle principale lit la manette, déplace
 le héros (collisions contre les voxels, saut), cherche le sol sous lui pour
-l'ombre, lit sa priorité dans `prio.bin` et place la caméra.
+l'ombre, lit la priorité et les masques des deux sprites dans
+`posinfo.bin` (au saut, le héros à sa hauteur, l'ombre au sol), place la
+caméra et bâtit la liste des sprites : les masques, le héros, l'ombre.
 
 ## Le banc sans affichage
 

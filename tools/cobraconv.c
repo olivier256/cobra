@@ -11,17 +11,26 @@
    - sprites.bin   le héros (2 x 4 tiles, colonne par colonne) puis son
                    ombre (2 x 1 tiles, couleur 15 de la ligne 3)
    - voxels.bin    les voxels, W x D x H octets (k, puis j, puis i)
-   - prio.bin      la priorité du héros à chaque position (voir plus bas)
+   - posinfo.bin   la priorité et les masques à chaque position (plus bas)
+   - masks.bin     les listes de masques
    - zone.inc      les constantes pour l'assembleur
    - attendu.bmp   l'image des deux plans telle que le VDP doit l'afficher
    - plans.bmp     la même, plan A en jaune, positions du héros marquées
+                   (vert : priorité basse, bleu : haute, rouge : masquée)
    - mesures.txt   les mesures
 
-   prio.bin : un octet par position (u = 4 m + 2, v = 4 n + 2, w = 16 k),
-   à l'adresse (k x MV + n) x MU + m, avec MU = 4 W, MV = 4 D :
-   bit 0 : la priorité du sprite (1 = haute), bit 1 : conflit (des pixels
-   du plan A devant le héros et d'autres derrière ; la priorité retenue est
-   celle qui en fait le moins de faux) ; $FF : position impossible.
+   posinfo.bin : un mot par position (u = 4 m + 2, v = 4 n + 2, w = 16 k),
+   rangé en (k x MV + n) x MU + m, avec MU = 4 W, MV = 4 D : $FFFF pour
+   une position impossible ; sinon, bit 15 : priorité haute des sprites,
+   bits 0 à 14 : la liste de masques, son adresse dans masks.bin (0 : la
+   liste vide).
+
+   masks.bin : des listes, chacune un mot (le nombre de masques) puis, par
+   masque, l'octet tx, l'octet ty (le tile de l'image de la zone) et le mot
+   des attributs du sprite (ligne, retournements, numéro du tile ; sans la
+   priorité, que la ROM met). Une liste commence par le mot 0 en tête du
+   fichier (la liste vide) ; deux positions qui ont les mêmes masques
+   partagent leur liste.
    ========================================================================= */
 
 #include "conv.h"
@@ -36,6 +45,7 @@ const char *bmp_tool_name = "cobraconv";
 #define VRAM_TILES 1472  /* $0000-$B7FF : tout ce qui n'est pas tables */
 #define SPRITE_TILES 10  /* héros et ombre */
 #define BEAM_TILES 80    /* réserve du rayon delta */
+#define MAX_MASKS 24     /* masques par position (la ROM en prend deux listes) */
 
 static FILE *open_out(const char *dir, const char *name, const char *mode) {
     char path[2 * MAX_PATH];
@@ -94,17 +104,18 @@ int main(int argc, char *argv[]) {
     palette_build(cubes.rgb, &pal);
 
     /* Positions du héros, plans, priorités */
-    const HeroShape *hero = &HERO_DEFAULT;
+    const Sprites *sp = &SPRITES_DEFAULT;
+    const HeroShape *hero = &sp->hero;
     const int maxPos = positions_list(&vox, hero, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(maxPos + 1));
     uint8_t *walk = malloc((size_t)maxPos + 1);
     const int npos = positions_list(&vox, hero, pos, walk, maxPos);
     uint8_t *inA = malloc((size_t)npix);
-    planes_assign(&scene, hero, pos, npos, inA);
+    planes_assign(&scene, sp, pos, npos, inA);
     uint8_t *cls = malloc((size_t)npos + 1);
-    planes_classify(&scene, hero, pos, npos, inA, cls);
+    planes_classify(&scene, sp, pos, npos, inA, cls);
 
-    int walkCount = 0, byClass[4] = {0, 0, 0, 0}, decorPixels = 0, aPixels = 0;
+    int walkCount = 0, byClass[3] = {0, 0, 0}, decorPixels = 0, aPixels = 0;
     for (int q = 0; q < npos; q++)
         if (walk[q]) {
             walkCount++;
@@ -115,14 +126,66 @@ int main(int argc, char *argv[]) {
         aPixels += inA[p];
     }
 
-    /* Tiles et plans */
+    /* Tiles et plans, puis les masques des positions masquées */
     static MdTiles tiles;
     tiles_build(&scene, inA, &pal, &tiles);
+    const int decorTiles = tiles.tileCount;
+    uint16_t *info = malloc(sizeof *info * (size_t)npos + 2);
+    size_t masksCap = 4096, masksLen = 2;
+    uint8_t *masks = calloc(masksCap, 1); /* la liste vide en tête */
+    int maxMasks = 0, maxRow = 0, masksTotal = 0, listCount = 0;
+    for (int q = 0; q < npos; q++) {
+        info[q] = cls[q] == PRIO_LOW ? 0 : 0x8000;
+        if (cls[q] != PRIO_MASKED)
+            continue;
+        Mask m[MAX_MASKS];
+        const int n = masks_build(&scene, sp, pos[q], inA, &tiles, m, MAX_MASKS);
+        if (n > MAX_MASKS)
+            bmp_fail("trop de masques à une position%s", "");
+        if (walk[q]) {
+            masksTotal += n;
+            if (n > maxMasks)
+                maxMasks = n;
+            for (int a = 0; a < n; a++) {
+                int row = 0;
+                for (int b = 0; b < n; b++)
+                    row += m[b].ty == m[a].ty;
+                if (row > maxRow)
+                    maxRow = row;
+            }
+        }
+        uint8_t list[2 + 4 * MAX_MASKS];
+        const size_t len = 2 + 4 * (size_t)n;
+        list[0] = 0;
+        list[1] = (uint8_t)n;
+        for (int a = 0; a < n; a++) {
+            list[2 + 4 * a] = m[a].tx;
+            list[3 + 4 * a] = m[a].ty;
+            list[4 + 4 * a] = (uint8_t)(m[a].attr >> 8);
+            list[5 + 4 * a] = (uint8_t)m[a].attr;
+        }
+        /* Une liste identique déjà rangée ? */
+        size_t at = 0;
+        for (size_t o = 2; o + len <= masksLen;
+             o += 2 + 4 * (size_t)masks[o + 1])
+            if (memcmp(masks + o, list, len) == 0) {
+                at = o;
+                break;
+            }
+        if (at == 0) {
+            if (masksLen + len > masksCap)
+                masks = realloc(masks, masksCap *= 2);
+            memcpy(masks + masksLen, list, len);
+            at = masksLen;
+            masksLen += len;
+            listCount++;
+        }
+        if (at > 0x7FFF)
+            bmp_fail("masks.bin dépasse 32 Ko%s", "");
+        info[q] |= (uint16_t)at;
+    }
 
-    FILE *f = open_out(out, "tiles.bin", "wb");
-    fwrite(tiles.tiles, 32, (size_t)tiles.tileCount, f);
-    fclose(f);
-    f = open_out(out, "plane_a.bin", "wb");
+    FILE *f = open_out(out, "plane_a.bin", "wb");
     for (int n = 0; n < PLANE_W * PLANE_H; n++)
         put16(f, tiles.planeA[n]);
     fclose(f);
@@ -179,13 +242,24 @@ int main(int argc, char *argv[]) {
     fclose(f);
 
     const int MU = 4 * vox.W, MV = 4 * vox.D;
-    uint8_t *prio = malloc((size_t)MU * MV * vox.H);
-    memset(prio, PRIO_NONE, (size_t)MU * MV * vox.H);
+    const size_t cells = (size_t)MU * MV * vox.H;
+    uint16_t *posinfo = malloc(cells * sizeof *posinfo);
+    for (size_t c = 0; c < cells; c++)
+        posinfo[c] = 0xFFFF;
     for (int q = 0; q < npos; q++)
-        prio[((pos[q].w >> 4) * MV + (pos[q].v >> 2)) * MU + (pos[q].u >> 2)] =
-            cls[q];
-    f = open_out(out, "prio.bin", "wb");
-    fwrite(prio, 1, (size_t)MU * MV * vox.H, f);
+        posinfo[((pos[q].w >> 4) * MV + (pos[q].v >> 2)) * MU +
+                (pos[q].u >> 2)] = info[q];
+    f = open_out(out, "posinfo.bin", "wb");
+    for (size_t c = 0; c < cells; c++)
+        put16(f, posinfo[c]);
+    fclose(f);
+    f = open_out(out, "masks.bin", "wb");
+    fwrite(masks, 1, masksLen, f);
+    fclose(f);
+
+    /* Les tiles, après les masques */
+    f = open_out(out, "tiles.bin", "wb");
+    fwrite(tiles.tiles, 32, (size_t)tiles.tileCount, f);
     fclose(f);
 
     f = open_out(out, "zone.inc", "w");
@@ -194,9 +268,10 @@ int main(int argc, char *argv[]) {
             "ZONE_W\t\tEQU\t%d\nZONE_D\t\tEQU\t%d\nZONE_H\t\tEQU\t%d\n"
             "ORIGIN_X\tEQU\t%d\nORIGIN_Y\tEQU\t%d\n"
             "IMG_W\t\tEQU\t%d\nIMG_H\t\tEQU\t%d\n"
-            "TILE_COUNT\tEQU\t%d\nPRIO_MU\t\tEQU\t%d\nPRIO_MV\t\tEQU\t%d\n",
+            "TILE_COUNT\tEQU\t%d\nPOS_MU\t\tEQU\t%d\nPOS_MV\t\tEQU\t%d\n"
+            "MAX_MASKS\tEQU\t%d\n",
             argv[1], vox.W, vox.D, vox.H, scene.originX, scene.originY,
-            scene.width, scene.height, tiles.tileCount, MU, MV);
+            scene.width, scene.height, tiles.tileCount, MU, MV, MAX_MASKS);
     fclose(f);
 
     /* Images */
@@ -211,8 +286,8 @@ int main(int argc, char *argv[]) {
             img[3 * p + 1] = (uint8_t)((img[3 * p + 1] + 200) / 2);
             img[3 * p + 2] = (uint8_t)(img[3 * p + 2] / 2);
         }
-    static const uint8_t mark[4][3] = {{40, 200, 40}, {40, 220, 255},
-                                       {255, 30, 30}, {255, 30, 30}};
+    static const uint8_t mark[3][3] = {{40, 200, 40}, {40, 220, 255},
+                                       {255, 30, 30}};
     for (int q = 0; q < npos; q++) {
         if (!walk[q])
             continue;
@@ -226,27 +301,33 @@ int main(int argc, char *argv[]) {
 
     /* Mesures */
     const int decorBudget = VRAM_TILES - SPRITE_TILES - BEAM_TILES;
-    char report[4096];
+    char report[8192];
     snprintf(report, sizeof report,
              "zone : %d x %d x %d, image %d x %d\n"
              "positions du héros : %d (dont %d posées)\n"
-             "  priorité basse %d (%.1f %%), haute %d (%.1f %%), conflit %d "
-             "(%.1f %% ; basse %d, haute %d)\n"
+             "  priorité basse %d (%.1f %%), haute %d (%.1f %%), masquées %d "
+             "(%.1f %%)\n"
              "plan A : %d pixels de décor sur %d (%.1f %%)\n"
-             "tiles : %d avec retournements, %d sans (tile vide compris) ; "
-             "budget du décor %d (marge %d)\n"
+             "tiles : %d du décor avec retournements, %d sans (tile vide "
+             "compris), %d pour les masques ; %d en tout, budget %d (marge "
+             "%d)\n"
              "entrées non vides : plan A %d, plan B %d\n"
              "tiles qui mêlaient les deux lignes de palette : %d, pixels "
              "approchés : %d\n"
+             "masques (positions posées) : %.1f en moyenne par position "
+             "masquée, %d au plus, %d au plus sur une rangée de tiles ; %d "
+             "listes, %zu octets\n"
              "ombre : %d pixels\n",
              vox.W, vox.D, vox.H, scene.width, scene.height, npos, walkCount,
              byClass[0], 100.0 * byClass[0] / walkCount, byClass[1],
-             100.0 * byClass[1] / walkCount, byClass[2] + byClass[3],
-             100.0 * (byClass[2] + byClass[3]) / walkCount, byClass[2],
-             byClass[3], aPixels, decorPixels,
-             100.0 * aPixels / decorPixels, tiles.tileCount, tiles.tilesNoFlip,
-             decorBudget, decorBudget - tiles.tileCount, tiles.usedA,
-             tiles.usedB, tiles.mixedTiles, tiles.approxPixels, shadowPixels);
+             100.0 * byClass[1] / walkCount, byClass[2],
+             100.0 * byClass[2] / walkCount, aPixels, decorPixels,
+             100.0 * aPixels / decorPixels, decorTiles, tiles.tilesNoFlip,
+             tiles.tileCount - decorTiles, tiles.tileCount, decorBudget,
+             decorBudget - tiles.tileCount, tiles.usedA, tiles.usedB,
+             tiles.mixedTiles, tiles.approxPixels,
+             byClass[2] ? (double)masksTotal / byClass[2] : 0.0, maxMasks,
+             maxRow, listCount, masksLen, shadowPixels);
     f = open_out(out, "mesures.txt", "w");
     fputs(report, f);
     fclose(f);
@@ -256,7 +337,9 @@ int main(int argc, char *argv[]) {
 
     free(rgb);
     free(img);
-    free(prio);
+    free(posinfo);
+    free(info);
+    free(masks);
     free(cls);
     free(inA);
     free(walk);

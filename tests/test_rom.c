@@ -9,10 +9,13 @@
    3. L'ombre : au départ, le héros est posé sur un sol dégagé ; les
       pixels sous l'opérateur d'ombre sont assombris de moitié, exactement.
    4. Les recouvrements : le héros est posé à des positions de la zone
-      (une sur trois) ; à chaque pixel de son sprite, il doit être visible
-      si et seulement si aucun voxel n'est devant lui (le même prédicat que
-      le convertisseur, voir test_scene). Aucune erreur permise hors des
-      positions en conflit ; pour celles-ci, on compte.
+      (une sur trois). À chaque pixel de son sprite, il doit être visible
+      si et seulement si aucun voxel n'est devant lui ; à chaque pixel de
+      son ombre (hors ceux que cache le héros), le décor doit être assombri
+      si et seulement si aucun voxel n'est devant elle (le même prédicat
+      que le convertisseur, voir test_scene). Aucune erreur permise, aux
+      positions masquées comme aux autres ; on compte les sprites par
+      ligne (20 au plus pour le VDP).
    5. Les cycles de chaque image (V_INT et boucle principale), au plus
       grand, doivent tenir dans une image.
 
@@ -205,17 +208,18 @@ int main(void) {
     cubes_load("demo/zone/cubes.txt", "demo/assets", &cubes);
     Scene scene;
     scene_render(&scene, &vox, &cubes);
-    const HeroShape *hs = &HERO_DEFAULT;
-    const int n = positions_list(&vox, hs, NULL, NULL, 0);
+    const Sprites *sps = &SPRITES_DEFAULT;
+    const int n = positions_list(&vox, &sps->hero, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(n + 1));
     uint8_t *walkable = malloc((size_t)n + 1), *cls = malloc((size_t)n + 1);
     uint8_t *inA = malloc((size_t)scene.width * scene.height);
-    positions_list(&vox, hs, pos, walkable, n);
-    planes_assign(&scene, hs, pos, n, inA);
-    planes_classify(&scene, hs, pos, n, inA, cls);
+    positions_list(&vox, &sps->hero, pos, walkable, n);
+    planes_assign(&scene, sps, pos, n, inA);
+    planes_classify(&scene, sps, pos, n, inA, cls);
 
-    int tested = 0, conflicts = 0, conflictsWrong = 0, wrongPositions = 0;
-    long wrongPixels = 0, conflictPixels = 0;
+    int tested = 0, masked = 0, heroBadPos = 0, shadowBadPos = 0;
+    int maxPerLine = 0;
+    long heroBad = 0, shadowBad = 0;
     for (int q = 0; q < n; q += 3) {
         if (!walkable[q])
             continue;
@@ -225,49 +229,90 @@ int main(void) {
         CHECK(md_ram16(&md, h) == pos[q].u && md_ram16(&md, h + 4) == pos[q].w,
               "le héros n'est pas resté en (%d, %d, %d)", pos[q].u, pos[q].v,
               pos[q].w);
-        static uint8_t rgb[VDP_W * VDP_H * 3], source[VDP_W * VDP_H];
-        vdp_render(&md.vdp, rgb, 1, source);
+        static uint8_t with[VDP_W * VDP_H * 3], without[VDP_W * VDP_H * 3];
+        static uint8_t source[VDP_W * VDP_H];
+        vdp_render(&md.vdp, with, 1, source);
+        vdp_render(&md.vdp, without, 0, NULL);
         const int cx = -vdp_scroll_x(&md.vdp), cy = vdp_scroll_y(&md.vdp);
-        /* Le sprite du héros : entrée 0 de la table des sprites */
+        /* La liste des sprites : le héros et l'ombre par leurs tiles */
         const uint32_t sat = (uint32_t)(md.vdp.reg[5] & 0x7E) << 9;
-        const int sy = (((md.vdp.vram[sat] << 8) | md.vdp.vram[sat + 1]) & 0x3FF) - 128;
-        const int sx = (((md.vdp.vram[sat + 6] << 8) | md.vdp.vram[sat + 7]) & 0x1FF) - 128;
-        const int tile = ((md.vdp.vram[sat + 4] << 8) | md.vdp.vram[sat + 5]) & 0x7FF;
-        long wrong = 0;
-        for (int y = 0; y < 32; y++)
-            for (int x = 0; x < 16; x++) {
-                const int X = sx + x, Y = sy + y;
-                if (X < 0 || Y < 0 || X >= VDP_W || Y >= VDP_H)
-                    continue;
-                const uint8_t b = md.vdp.vram[(tile + (x >> 3) * 4 + (y >> 3)) * 32 +
-                                              (y & 7) * 4 + ((x & 7) >> 1)];
-                if (((x & 1) ? b & 15 : b >> 4) == 0)
-                    continue; /* pixel transparent du sprite */
-                const int ix = X + cx, iy = Y + cy;
-                const int32_t o = (ix >= 0 && iy >= 0 && ix < scene.width &&
-                                   iy < scene.height)
-                                      ? scene.owner[iy * scene.width + ix]
-                                      : -1;
-                const int hidden = o >= 0 && voxel_in_front(&scene, o, hs, pos[q]);
-                const int shown = source[Y * VDP_W + X] == 1;
-                wrong += hidden == shown;
-            }
-        tested++;
-        if (cls[q] & 2) {
-            conflicts++;
-            conflictPixels += wrong;
-            conflictsWrong += wrong != 0;
-        } else {
-            wrongPixels += wrong;
-            wrongPositions += wrong != 0;
+        int heroIdx = -1, shadowIdx = -1, count = 0, perLine[VDP_H] = {0};
+        for (int e = 0, guard = 0; guard < 80; guard++) {
+            const uint8_t *r = md.vdp.vram + sat + e * 8;
+            const int tile = ((r[4] << 8) | r[5]) & 0x7FF;
+            const int sy = (((r[0] << 8) | r[1]) & 0x3FF) - 128;
+            const int vs = (r[2] & 3) + 1;
+            if (tile == 1462)
+                heroIdx = e;
+            if (tile == 1470)
+                shadowIdx = e;
+            for (int y = sy; y < sy + vs * 8; y++)
+                if (y >= 0 && y < VDP_H)
+                    perLine[y]++;
+            count++;
+            if ((r[3] & 0x7F) == 0)
+                break;
+            e = r[3] & 0x7F;
         }
+        for (int y = 0; y < VDP_H; y++)
+            if (perLine[y] > maxPerLine)
+                maxPerLine = perLine[y];
+        CHECK(heroIdx >= 0 && shadowIdx >= 0, "sprites du héros introuvables");
+        if (heroIdx < 0 || shadowIdx < 0)
+            break;
+        long hb = 0, sb = 0;
+        for (int which = 0; which < 2; which++) {
+            const int e = which ? shadowIdx : heroIdx;
+            const uint8_t *r = md.vdp.vram + sat + e * 8;
+            const int sy = (((r[0] << 8) | r[1]) & 0x3FF) - 128;
+            const int sx = (((r[6] << 8) | r[7]) & 0x1FF) - 128;
+            const int tile = ((r[4] << 8) | r[5]) & 0x7FF;
+            const int vs = which ? 1 : 4;
+            const HeroShape *box = which ? &sps->shadow : &sps->hero;
+            for (int y = 0; y < vs * 8; y++)
+                for (int x = 0; x < 16; x++) {
+                    const int X = sx + x, Y = sy + y;
+                    if (X < 0 || Y < 0 || X >= VDP_W || Y >= VDP_H)
+                        continue;
+                    const uint8_t b = md.vdp.vram[(tile + (x >> 3) * vs + (y >> 3)) * 32 +
+                                                  (y & 7) * 4 + ((x & 7) >> 1)];
+                    if (((x & 1) ? b & 15 : b >> 4) == 0)
+                        continue; /* pixel transparent du sprite */
+                    const int p = Y * VDP_W + X;
+                    if (which && source[p] == heroIdx + 1)
+                        continue; /* l'ombre sous le héros */
+                    const int ix = X + cx, iy = Y + cy;
+                    const int32_t o = (ix >= 0 && iy >= 0 && ix < scene.width &&
+                                       iy < scene.height)
+                                          ? scene.owner[iy * scene.width + ix]
+                                          : -1;
+                    const int hidden = o >= 0 && voxel_in_front(&scene, o, box, pos[q]);
+                    const int shown = which ? memcmp(with + 3 * p, without + 3 * p, 3) != 0
+                                            : source[p] == heroIdx + 1;
+                    if (hidden == shown) {
+                        if (which)
+                            sb++;
+                        else
+                            hb++;
+                    }
+                }
+        }
+        tested++;
+        masked += cls[q] == PRIO_MASKED;
+        heroBad += hb;
+        shadowBad += sb;
+        heroBadPos += hb != 0;
+        shadowBadPos += sb != 0;
+        (void)count;
     }
-    CHECK(wrongPositions == 0,
-          "recouvrements : %d positions (hors conflits) fausses, %ld pixels",
-          wrongPositions, wrongPixels);
-    printf("recouvrements : %d positions essayées, justes hors conflits ; "
-           "%d en conflit, dont %d visiblement fausses (%ld pixels)\n",
-           tested, conflicts, conflictsWrong, conflictPixels);
+    CHECK(heroBadPos == 0, "héros : %d positions fausses (%ld pixels)",
+          heroBadPos, heroBad);
+    CHECK(shadowBadPos == 0, "ombre : %d positions fausses (%ld pixels)",
+          shadowBadPos, shadowBad);
+    CHECK(maxPerLine <= 20, "%d sprites sur une ligne", maxPerLine);
+    printf("recouvrements : %d positions essayées (dont %d masquées) : héros "
+           "faux à %d, ombre fausse à %d ; au plus %d sprites sur une ligne\n",
+           tested, masked, heroBadPos, shadowBadPos, maxPerLine);
 
     free(inA);
     free(cls);

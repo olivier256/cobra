@@ -30,7 +30,7 @@ make sim        # la ROM sur le banc, avec demo/promenade.txt
 
 `make data` produit aussi `build/data/attendu.bmp` (l'image de la zone telle
 que le VDP doit l'afficher), `build/data/plans.bmp` (le plan A en jaune, les
-positions du héros en vert : priorité basse, bleu : haute, rouge : conflit)
+positions du héros en vert : priorité basse, bleu : haute, rouge : masquée)
 et `build/data/mesures.txt`.
 
 ## Modifier la zone
@@ -54,9 +54,10 @@ AddressSanitizer et UBSan (`-DCOBRA_SANITIZE=OFF` pour s'en passer).
    identique.
 3. `test_rom` : la ROM sur le banc (Musashi + modèle du VDP) : elle
    démarre ; le décor affiché est l'image attendue, au pixel près, tout au
-   long d'une promenade ; l'ombre assombrit de moitié ; à 1 297 positions,
-   le héros est caché exactement par ce qui est devant lui (sauf les
-   positions en conflit, comptées) ; les cycles par image.
+   long d'une promenade ; l'ombre assombrit de moitié ; à 1 297 positions
+   (dont 120 masquées), le héros et son ombre sont cachés exactement par ce
+   qui est devant eux ; 20 sprites par ligne au plus ; les cycles par
+   image.
 
 ## Fichiers
 

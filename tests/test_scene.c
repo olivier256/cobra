@@ -6,9 +6,11 @@
       posés exactement sur une arête (deux voxels à la même profondeur)
       peuvent différer.
    2. « Ce voxel est-il devant le héros ? » (boîtes séparées) contre le
-      rayon : partout où le rayon touche la boîte du héros.
+      rayon : partout où le rayon touche la boîte du héros ; de même pour
+      la boîte (plate) de son ombre.
    3. Le plan A contre sa définition, pixel par pixel : un pixel y est si
-      et seulement s'il cache le héros à l'une des positions.
+      et seulement s'il cache le héros ou son ombre à l'une des positions ;
+      le classement des positions contre sa définition.
    4. Les tiles : l'image décodée (tables des plans, tiles, palette) est
       celle de la scène, sauf les pixels comptés comme approchés.
 
@@ -64,46 +66,59 @@ static long check_raycast(const Scene *s, const char *name) {
 }
 
 /* 2. et 3. */
-static void check_planes(const Scene *s, const char *name, long *compared) {
-    const HeroShape *h = &HERO_DEFAULT;
+static int inside(const Scene *s, const HeroShape *h, Pos p, int x, int y) {
+    int x0, y0, x1, y1;
+    hero_rect(s, h, p, &x0, &y0, &x1, &y1);
+    return x >= x0 && x < x1 && y >= y0 && y < y1;
+}
+
+/* step : une ligne et une position sur 'step' pour les références lentes
+   (la zone de démo) */
+static void check_planes(const Scene *s, const char *name, long *compared,
+                         int step) {
+    const Sprites *sp = &SPRITES_DEFAULT;
+    const HeroShape *h = &sp->hero;
     const int n = positions_list(s->vox, h, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(n + 1));
     positions_list(s->vox, h, pos, NULL, n);
 
-    /* 2. Le prédicat contre le rayon (une position sur 3) */
+    /* 2. Le prédicat contre le rayon (une position sur 3), pour le héros
+       et pour son ombre */
     long disagree = 0;
-    for (int q = 0; q < n; q += 3) {
-        int x0, y0, x1, y1;
-        hero_rect(s, h, pos[q], &x0, &y0, &x1, &y1);
-        for (int y = y0; y < y1; y++)
-            for (int x = x0; x < x1; x++) {
-                if (x < 0 || y < 0 || x >= s->width || y >= s->height)
-                    continue;
-                const int32_t o = s->owner[y * s->width + x];
-                const int ray = ray_voxel_in_front(s, x, y, h, pos[q]);
-                if (o < 0 || ray < 0)
-                    continue;
-                (*compared)++;
-                if (ray != voxel_in_front(s, o, h, pos[q]))
-                    disagree++;
-            }
-    }
+    for (int q = 0; q < n; q += 3)
+        for (int which = 0; which < 2; which++) {
+            const HeroShape *b = which ? &sp->shadow : h;
+            int x0, y0, x1, y1;
+            hero_rect(s, b, pos[q], &x0, &y0, &x1, &y1);
+            for (int y = y0 - 4; y < y1 + 4; y++)
+                for (int x = x0; x < x1; x++) {
+                    if (x < 0 || y < 0 || x >= s->width || y >= s->height)
+                        continue;
+                    const int32_t o = s->owner[y * s->width + x];
+                    const int ray = ray_voxel_in_front(s, x, y, b, pos[q]);
+                    if (o < 0 || ray < 0)
+                        continue;
+                    (*compared)++;
+                    if (ray != voxel_in_front(s, o, b, pos[q]))
+                        disagree++;
+                }
+        }
     CHECK(disagree == 0, "%s : %ld pixels où le prédicat contredit le rayon",
           name, disagree);
 
     /* 3. Plan A contre sa définition (référence : pixel par pixel) */
     uint8_t *inA = malloc((size_t)s->width * s->height);
-    planes_assign(s, h, pos, n, inA);
+    planes_assign(s, sp, pos, n, inA);
     long wrong = 0;
-    for (int y = 0; y < s->height; y++)
+    for (int y = 0; y < s->height; y += step)
         for (int x = 0; x < s->width; x++) {
             const int32_t o = s->owner[y * s->width + x];
             int want = 0;
             for (int q = 0; q < n && !want && o >= 0; q++) {
-                int x0, y0, x1, y1;
-                hero_rect(s, h, pos[q], &x0, &y0, &x1, &y1);
-                want = x >= x0 && x < x1 && y >= y0 && y < y1 &&
-                       voxel_in_front(s, o, h, pos[q]);
+                if (inside(s, h, pos[q], x, y))
+                    want = voxel_in_front(s, o, h, pos[q]);
+                else if (inside(s, &sp->shadow, pos[q], x, y))
+                    want = voxel_in_front(s, o, &sp->shadow, pos[q]);
             }
             wrong += want != inA[y * s->width + x];
         }
@@ -112,24 +127,28 @@ static void check_planes(const Scene *s, const char *name, long *compared) {
 
     /* Classement : référence directe, position par position */
     uint8_t *cls = malloc((size_t)n + 1);
-    planes_classify(s, h, pos, n, inA, cls);
+    planes_classify(s, sp, pos, n, inA, cls);
     long badCls = 0;
-    const int step = 1;
     for (int q = 0; q < n; q += step) {
         int x0, y0, x1, y1, f = 0, b = 0;
         hero_rect(s, h, pos[q], &x0, &y0, &x1, &y1);
+        y1 += 8; /* l'ombre déborde sous le héros */
         for (int y = y0 < 0 ? 0 : y0; y < y1 && y < s->height; y++)
             for (int x = x0 < 0 ? 0 : x0; x < x1 && x < s->width; x++) {
                 if (!inA[y * s->width + x])
                     continue;
-                if (voxel_in_front(s, s->owner[y * s->width + x], h, pos[q]))
-                    f++;
+                const int32_t o = s->owner[y * s->width + x];
+                int front;
+                if (inside(s, h, pos[q], x, y))
+                    front = voxel_in_front(s, o, h, pos[q]);
+                else if (inside(s, &sp->shadow, pos[q], x, y))
+                    front = voxel_in_front(s, o, &sp->shadow, pos[q]);
                 else
-                    b++;
+                    continue;
+                f += front;
+                b += !front;
             }
-        const int want = !b   ? PRIO_LOW
-                         : !f ? PRIO_HIGH
-                              : (b > f ? PRIO_CONFLICT_HIGH : PRIO_CONFLICT_LOW);
+        const int want = !b ? PRIO_LOW : !f ? PRIO_HIGH : PRIO_MASKED;
         badCls += want != cls[q];
     }
     CHECK(badCls == 0, "%s : %ld positions mal classées", name, badCls);
@@ -140,12 +159,12 @@ static void check_planes(const Scene *s, const char *name, long *compared) {
 
 /* 4. Les tiles redonnent la scène */
 static void check_tiles(const Scene *s, const Cubes *c, const char *name) {
-    const HeroShape *h = &HERO_DEFAULT;
-    const int n = positions_list(s->vox, h, NULL, NULL, 0);
+    const Sprites *sp = &SPRITES_DEFAULT;
+    const int n = positions_list(s->vox, &sp->hero, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(n + 1));
-    positions_list(s->vox, h, pos, NULL, n);
+    positions_list(s->vox, &sp->hero, pos, NULL, n);
     uint8_t *inA = malloc((size_t)s->width * s->height);
-    planes_assign(s, h, pos, n, inA);
+    planes_assign(s, sp, pos, n, inA);
     MdPalette pal;
     palette_build(c->rgb, &pal);
     static MdTiles t;
@@ -185,7 +204,7 @@ int main(void) {
     Scene s;
     scene_render(&s, &demo, &cubes);
     long pixels = check_raycast(&s, "démo"), compared = 0;
-    check_planes(&s, "démo", &compared);
+    check_planes(&s, "démo", &compared, 3);
     check_tiles(&s, &cubes, "démo");
     scene_free(&s);
 
@@ -209,7 +228,7 @@ int main(void) {
         scene_render(&s, &v, &cubes);
         pixels += check_raycast(&s, name);
         if (z % 4 == 0)
-            check_planes(&s, name, &compared);
+            check_planes(&s, name, &compared, 1);
         if (s.width <= 512 && s.height <= 512)
             check_tiles(&s, &cubes, name);
         scene_free(&s);

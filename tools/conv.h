@@ -108,29 +108,38 @@ int ray_voxel_in_front(const Scene *s, int x, int y, const HeroShape *h,
 int positions_list(const Voxels *v, const HeroShape *h, Pos *out,
                    uint8_t *walk, int max);
 
-/* Plan A : un pixel de décor y va s'il peut cacher le héros à l'une des
-   positions (le pixel est dans le rectangle du sprite, son voxel devant
-   la boîte). inA : width x height octets. */
-void planes_assign(const Scene *s, const HeroShape *h, const Pos *pos, int n,
+/* Le héros et son ombre, posés à une même position. L'ombre : une boîte
+   plate de la même empreinte, posée au sol sous le héros ; son sprite fait
+   16 x 8, centré sur le point du sol. */
+typedef struct {
+    HeroShape hero, shadow;
+} Sprites;
+
+static const Sprites SPRITES_DEFAULT = {{4, 26, 16, 32, 30}, {4, 1, 16, 8, 4}};
+
+/* Le pixel (x, y), de voxel o, est-il devant ce qui est dessiné là quand
+   le héros est en p ? Dans le rectangle du héros : devant sa boîte ;
+   sinon, dans celui de l'ombre : devant la boîte de l'ombre ; ailleurs :
+   devant la boîte du héros. */
+int pixel_in_front(const Scene *s, const Sprites *sp, int32_t o, int x, int y,
+                   Pos p);
+
+/* Plan A : un pixel de décor y va s'il peut cacher le héros ou son ombre à
+   l'une des positions (le pixel est dans le rectangle d'un des deux
+   sprites, son voxel devant la boîte correspondante). inA : width x height
+   octets. */
+void planes_assign(const Scene *s, const Sprites *sp, const Pos *pos, int n,
                    uint8_t *inA);
 
-/* Bit 0 : la priorité du sprite ; bit 1 : conflit */
-enum {
-    PRIO_LOW = 0,
-    PRIO_HIGH = 1,
-    PRIO_CONFLICT_LOW = 2,
-    PRIO_CONFLICT_HIGH = 3,
-    PRIO_NONE = 0xFF
-};
+enum { PRIO_LOW = 0, PRIO_HIGH = 1, PRIO_MASKED = 2, PRIO_NONE = 0xFF };
 
-/* Pour chaque position : les pixels du plan A dans le rectangle du sprite
-   sont tous devant (priorité basse), tous derrière (priorité haute), ou des
-   deux sortes (conflit). En cas de conflit, la priorité qui fait le moins
-   de pixels faux : basse s'il y a au moins autant de pixels devant que
-   derrière (avec la basse, ceux de derrière cachent le héros à tort ; avec
-   la haute, il passe à tort devant ceux de devant). */
-void planes_classify(const Scene *s, const HeroShape *h, const Pos *pos,
-                     int n, const uint8_t *inA, uint8_t *cls);
+/* Pour chaque position : les pixels du plan A dans les rectangles des deux
+   sprites sont tous devant (priorité basse), tous derrière (priorité
+   haute), ou des deux sortes (masqués : priorité haute, et des sprites
+   « masques » recopient par-dessus les pixels du plan A qui sont devant,
+   voir masks_build) */
+void planes_classify(const Scene *s, const Sprites *sp, const Pos *pos, int n,
+                     const uint8_t *inA, uint8_t *cls);
 
 /* ---- Palettes, tiles et plans de la Mega Drive -------------------------- */
 
@@ -155,7 +164,10 @@ int palette_color(uint8_t index);
 
 typedef struct {
     int tileCount; /* tiles de 32 octets ; le tile 0 est vide */
+    int maxTiles;
     uint8_t (*tiles)[32];
+    int tableSize;
+    int *table; /* table de hachage des tiles rangés (numéro + 1) */
     uint16_t planeA[PLANE_W * PLANE_H], planeB[PLANE_W * PLANE_H];
     /* mesures */
     int tilesNoFlip;          /* sans les retournements */
@@ -174,6 +186,32 @@ void tiles_free(MdTiles *t);
    des deux plans, width x height x 3 */
 void tiles_render(const MdTiles *t, const MdPalette *pal, int width,
                   int height, uint8_t *rgb);
+
+/* Range un tile (s'il n'y est pas déjà, retournements compris) ; renvoie
+   son numéro, et dans *flags les retournements à appliquer (bit 0 :
+   horizontal, bit 1 : vertical) */
+int tiles_add(MdTiles *t, const uint8_t px[64], int *flags);
+
+/* Les pixels du tile (tx, ty) du plan A, tels qu'affichés (retournements
+   appliqués), et sa ligne de palette */
+void tiles_plane_a(const MdTiles *t, int tx, int ty, uint8_t px[64],
+                   int *line);
+
+/* ---- Masques -------------------------------------------------------------
+   À une position masquée, un sprite de 8 x 8 par tile du plan A qui
+   recouvre le héros ou son ombre et contient des pixels devant eux : il
+   recopie ces pixels-là (les autres sont transparents), placé sur la grille
+   des tiles, avant le héros dans la liste des sprites et prioritaire. */
+
+typedef struct {
+    uint8_t tx, ty; /* tile de l'image de la zone */
+    uint16_t attr;  /* ligne, retournements, numéro du tile (sans priorité) */
+} Mask;
+
+/* Les masques de la position p ; renvoie leur nombre (au plus max) ; les
+   tiles « devant seulement » sont ajoutés à t */
+int masks_build(const Scene *s, const Sprites *sp, Pos p, const uint8_t *inA,
+                MdTiles *t, Mask *out, int max);
 
 /* 4 bits par pixel, gros-boutiste : un tile de 8 x 8 */
 void tile_pack(const uint8_t px[64], uint8_t out[32]);

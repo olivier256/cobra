@@ -70,12 +70,6 @@ static void orient(const uint8_t in[64], int o, uint8_t out[64]) {
         }
 }
 
-/* Table de hachage des tiles déjà rangés */
-typedef struct {
-    int size;
-    int *slot; /* numéro du tile + 1, 0 = libre */
-} Table;
-
 static uint32_t hash(const uint8_t px[64]) {
     uint32_t h = 2166136261u;
     for (int n = 0; n < 64; n++)
@@ -83,16 +77,51 @@ static uint32_t hash(const uint8_t px[64]) {
     return h;
 }
 
-static int table_find(const Table *t, uint8_t (*tiles)[32], const uint8_t
-                      px[64]) {
+/* Cherche px dans la table (slots : numéro + 1, 0 = libre) ; renvoie le
+   numéro, ou -(case libre) - 1 */
+static int table_find(const int *slot, int size, uint8_t (*tiles)[32],
+                      const uint8_t px[64]) {
     uint8_t packed[32];
     tile_pack(px, packed);
-    for (uint32_t h = hash(px) % (uint32_t)t->size;; h = (h + 1) % (uint32_t)t->size) {
-        if (t->slot[h] == 0)
+    for (uint32_t h = hash(px) % (uint32_t)size;; h = (h + 1) % (uint32_t)size) {
+        if (slot[h] == 0)
             return -(int)h - 1;
-        if (memcmp(tiles[t->slot[h] - 1], packed, 32) == 0)
-            return t->slot[h] - 1;
+        if (memcmp(tiles[slot[h] - 1], packed, 32) == 0)
+            return slot[h] - 1;
     }
+}
+
+int tiles_add(MdTiles *t, const uint8_t px[64], int *flags) {
+    int freeSlot = -1;
+    for (int o = 0; o < 4; o++) {
+        uint8_t op[64];
+        orient(px, o, op);
+        const int f = table_find(t->table, t->tableSize, t->tiles, op);
+        if (f >= 0) {
+            *flags = o;
+            return f;
+        }
+        if (o == 0)
+            freeSlot = -f - 1;
+    }
+    if (t->tileCount >= t->maxTiles)
+        bmp_fail("trop de tiles%s", "");
+    const int index = t->tileCount++;
+    tile_pack(px, t->tiles[index]);
+    t->table[freeSlot] = index + 1;
+    *flags = 0;
+    if (index >= 2048)
+        bmp_fail("plus de 2048 tiles%s", "");
+    return index;
+}
+
+void tiles_plane_a(const MdTiles *t, int tx, int ty, uint8_t px[64],
+                   int *line) {
+    const uint16_t e = t->planeA[ty * PLANE_W + tx];
+    uint8_t raw[64];
+    tile_unpack(t->tiles[e & 0x7ff], raw);
+    orient(raw, (e >> 11) & 3, px);
+    *line = (e >> 13) & 3;
 }
 
 void tiles_build(const Scene *s, const uint8_t *inA, const MdPalette *pal,
@@ -103,12 +132,14 @@ void tiles_build(const Scene *s, const uint8_t *inA, const MdPalette *pal,
                  "tiles%s",
                  "");
     memset(t, 0, sizeof *t);
-    const int maxTiles = 2 * tw * th + 1;
-    t->tiles = calloc((size_t)maxTiles, 32);
-    Table table = {4 * maxTiles + 1, NULL}, noFlip = {4 * maxTiles + 1, NULL};
-    table.slot = calloc((size_t)table.size, sizeof(int));
-    noFlip.slot = calloc((size_t)noFlip.size, sizeof(int));
-    uint8_t (*noFlipTiles)[32] = calloc((size_t)maxTiles, 32);
+    /* Assez de place pour les deux plans et les masques */
+    t->maxTiles = 4 * tw * th + 1;
+    t->tiles = calloc((size_t)t->maxTiles, 32);
+    t->tableSize = 4 * t->maxTiles + 1;
+    t->table = calloc((size_t)t->tableSize, sizeof(int));
+    const int noFlipSize = 4 * t->maxTiles + 1;
+    int *noFlip = calloc((size_t)noFlipSize, sizeof(int));
+    uint8_t (*noFlipTiles)[32] = calloc((size_t)t->maxTiles, 32);
     int noFlipCount = 1;
     t->tileCount = 1; /* tile 0 : vide */
     for (int n = 0; n < PLANE_W * PLANE_H; n++)
@@ -181,35 +212,16 @@ void tiles_build(const Scene *s, const uint8_t *inA, const MdPalette *pal,
                     }
                 }
                 /* Sans retournement (pour la mesure) */
-                const int nf = table_find(&noFlip, noFlipTiles, px);
+                const int nf = table_find(noFlip, noFlipSize, noFlipTiles, px);
                 if (nf < 0) {
                     tile_pack(px, noFlipTiles[noFlipCount]);
-                    noFlip.slot[-nf - 1] = ++noFlipCount;
+                    noFlip[-nf - 1] = ++noFlipCount;
                 }
-                /* Avec retournements */
-                int index = -1, flags = 0, freeSlot = -1;
-                for (int o = 0; o < 4 && index < 0; o++) {
-                    uint8_t op[64];
-                    orient(px, o, op);
-                    const int f = table_find(&table, t->tiles, op);
-                    if (f >= 0) {
-                        index = f;
-                        flags = o;
-                    } else if (o == 0) {
-                        freeSlot = -f - 1;
-                    }
-                }
-                if (index < 0) {
-                    index = t->tileCount++;
-                    tile_pack(px, t->tiles[index]);
-                    table.slot[freeSlot] = index + 1;
-                }
-                if (index >= 2048)
-                    bmp_fail("plus de 2048 tiles%s", "");
+                int flags;
+                const int index = tiles_add(t, px, &flags);
                 const uint16_t entry =
                     (uint16_t)((plane == 0 ? 0x8000 : 0) | (bestLine << 13) |
-                               ((flags & 2) << 11) | ((flags & 1) << 11) |
-                               index);
+                               (flags << 11) | index);
                 if (plane == 0) {
                     t->planeA[ty * PLANE_W + tx] = entry;
                     t->usedA++;
@@ -218,15 +230,16 @@ void tiles_build(const Scene *s, const uint8_t *inA, const MdPalette *pal,
                     t->usedB++;
                 }
             }
-    t->tilesNoFlip = noFlipCount - 1 + 1; /* le tile vide compris */
-    free(table.slot);
-    free(noFlip.slot);
+    t->tilesNoFlip = noFlipCount; /* le tile vide compris */
+    free(noFlip);
     free(noFlipTiles);
 }
 
 void tiles_free(MdTiles *t) {
     free(t->tiles);
+    free(t->table);
     t->tiles = NULL;
+    t->table = NULL;
 }
 
 static int plane_pixel(const MdTiles *t, uint16_t entry, int x, int y) {

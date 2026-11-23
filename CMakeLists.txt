@@ -34,7 +34,10 @@ add_custom_command(
 	COMMAND m68kmake ${MUSASHI_GEN} ${MUSASHI}/m68k_in.c
 	DEPENDS m68kmake ${MUSASHI}/m68k_in.c)
 
-set(MUSASHI_FLAGS -w -include ${CMAKE_SOURCE_DIR}/sim/musashi_cobra.h)
+# -fno-common : les grandes tables de Musashi (m68kops.c, sans valeur
+# initiale) iraient sinon en __common, que l'éditeur de liens du Mac aligne
+# sur 32 Ko et signale (« reducing alignment of section __DATA,__common »)
+set(MUSASHI_FLAGS -w -fno-common -include ${CMAKE_SOURCE_DIR}/sim/musashi_cobra.h)
 add_library(musashi STATIC ${MUSASHI}/m68kcpu.c ${MUSASHI}/m68kdasm.c
 	${MUSASHI}/softfloat/softfloat.c ${MUSASHI_GEN}/m68kops.c)
 target_include_directories(musashi PUBLIC ${MUSASHI} ${MUSASHI_GEN})
