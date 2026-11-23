@@ -31,10 +31,12 @@ rom: data
 	$(ASM68K) /p rom/cobra.asm,$(ROM)
 	$(BUILD)/romsum $(ROM)
 
-# Construit clownassembler (licence AGPL, compatible asm68k) dans build/
+# Construit clownassembler (licence AGPL, compatible asm68k) dans build/ ;
+# il lui faut son sous-module clowncommon
 asm:
 	@test -d $(BUILD)/clownassembler-src || git clone --depth 1 \
 		https://github.com/Clownacy/clownassembler.git $(BUILD)/clownassembler-src
+	git -C $(BUILD)/clownassembler-src submodule update --init --depth 1
 	cmake -S $(BUILD)/clownassembler-src -B $(BUILD)/clownassembler \
 		-DCMAKE_BUILD_TYPE=Release >/dev/null
 	cmake --build $(BUILD)/clownassembler --target clownassembler_asm68k

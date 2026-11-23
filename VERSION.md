@@ -108,3 +108,32 @@ recouvrements du héros à 1 297 positions (8,2 % en conflit).
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
 ```
+
+---
+
+make asm : le sous-module de clownassembler
+
+**Ce que fait cette version** :
+- **Correction** : `make asm` clonait clownassembler sans son sous-module
+  `clowncommon`, et la compilation s'arrêtait sur « clowncommon/clowncommon.h
+  file not found ». Le sous-module est maintenant récupéré à chaque
+  `make asm`, y compris dans un clone déjà fait sans lui (celui de la
+  première tentative) : il suffit de relancer `make asm`.
+
+**Mesures** : inchangées. Vérifié depuis un clone sans sous-module :
+`make asm` construit l'assembleur, et `make test` réassemble
+`rom/cobra.bin` à l'identique.
+
+Message de commit proposé :
+
+```
+make asm : le sous-module de clownassembler
+
+make asm clonait clownassembler sans son sous-module clowncommon : la
+compilation échouait (clowncommon/clowncommon.h introuvable). Il est
+maintenant récupéré à chaque make asm, y compris dans un clone déjà
+fait.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
+```
