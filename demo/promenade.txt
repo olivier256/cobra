@@ -1,0 +1,17 @@
+# Promenade de démo pour make sim : « N BOUTONS » = N images dans cet état
+# (U D L R A B C S, - pour rien)
+30 -
+40 R
+30 D
+1 DC
+50 D
+60 R
+1 RA
+40 R
+60 DR
+80 L
+1 B
+30 -
+60 U
+60 LU
+40 DL
