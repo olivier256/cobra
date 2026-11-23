@@ -9,12 +9,13 @@ static int solid(const Voxels *v, int i, int j, int k) {
     return vox_at(v, i, j, k) != 0;
 }
 
-int positions_list(const Voxels *v, const HeroShape *h, Pos *out,
+int positions_list(const Voxels *v, const HeroShape *h, int step, Pos *out,
                    uint8_t *walk, int max) {
     int n = 0;
+    const int first = step == 1 ? 0 : step / 2;
     for (int k = 1; k < v->H; k++)
-        for (int vv = 2; vv + h->half <= 16 * v->D; vv += POS_STEP)
-            for (int u = 2; u + h->half <= 16 * v->W; u += POS_STEP) {
+        for (int vv = first; vv + h->half <= 16 * v->D; vv += step)
+            for (int u = first; u + h->half <= 16 * v->W; u += step) {
                 if (u - h->half < 0 || vv - h->half < 0)
                     continue;
                 const int w = 16 * k;

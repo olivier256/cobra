@@ -7,7 +7,7 @@ projet : [ARCHITECTURE.md](ARCHITECTURE.md) ; historique : [VERSION.md](VERSION.
 
 ## La ROM
 
-`rom/cobra.bin` (128 Ko) est dans le dépôt, déjà assemblée : elle se lance
+`rom/cobra.bin` (256 Ko) est dans le dépôt, déjà assemblée : elle se lance
 dans n'importe quel émulateur Mega Drive (BlastEm, Genesis Plus GX…) ou
 sur une console avec une cartouche flash.
 
@@ -54,10 +54,10 @@ AddressSanitizer et UBSan (`-DCOBRA_SANITIZE=OFF` pour s'en passer).
    identique.
 3. `test_rom` : la ROM sur le banc (Musashi + modèle du VDP) : elle
    démarre ; le décor affiché est l'image attendue, au pixel près, tout au
-   long d'une promenade ; l'ombre assombrit de moitié ; à 1 297 positions
-   (dont 120 masquées), le héros et son ombre sont cachés exactement par ce
-   qui est devant eux ; 20 sprites par ligne au plus ; les cycles par
-   image.
+   long d'une promenade ; l'ombre assombrit de moitié ; à 1 500 positions
+   quelconques, le héros et son ombre sont cachés exactement par ce qui est
+   devant eux ; pendant 120 sauts, l'ombre aussi (le héros en l'air est
+   compté) ; 20 sprites par ligne au plus ; les cycles par image.
 
 ## Fichiers
 

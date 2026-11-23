@@ -78,9 +78,9 @@ static void check_planes(const Scene *s, const char *name, long *compared,
                          int step) {
     const Sprites *sp = &SPRITES_DEFAULT;
     const HeroShape *h = &sp->hero;
-    const int n = positions_list(s->vox, h, NULL, NULL, 0);
+    const int n = positions_list(s->vox, h, 4, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(n + 1));
-    positions_list(s->vox, h, pos, NULL, n);
+    positions_list(s->vox, h, 4, pos, NULL, n);
 
     /* 2. Le prédicat contre le rayon (une position sur 3), pour le héros
        et pour son ombre */
@@ -160,9 +160,9 @@ static void check_planes(const Scene *s, const char *name, long *compared,
 /* 4. Les tiles redonnent la scène */
 static void check_tiles(const Scene *s, const Cubes *c, const char *name) {
     const Sprites *sp = &SPRITES_DEFAULT;
-    const int n = positions_list(s->vox, &sp->hero, NULL, NULL, 0);
+    const int n = positions_list(s->vox, &sp->hero, 4, NULL, NULL, 0);
     Pos *pos = malloc(sizeof *pos * (size_t)(n + 1));
-    positions_list(s->vox, &sp->hero, pos, NULL, n);
+    positions_list(s->vox, &sp->hero, 4, pos, NULL, n);
     uint8_t *inA = malloc((size_t)s->width * s->height);
     planes_assign(s, sp, pos, n, inA);
     MdPalette pal;

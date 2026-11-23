@@ -99,13 +99,13 @@ int ray_voxel_in_front(const Scene *s, int x, int y, const HeroShape *h,
 
 /* ---- Les positions du héros et les deux plans --------------------------- */
 
-#define POS_STEP 4 /* unités entre deux positions essayées */
-
 /* Les positions où le héros peut se trouver : boîte libre, posée sur un
-   voxel (marche) ou un niveau au-dessus (saut). u = 4 m + 2, v = 4 n + 2,
-   w = 16 k. Renvoie le nombre de positions ; 'out' en reçoit au plus max ;
-   'walk' (si non nul) dit pour chacune si elle est posée. */
-int positions_list(const Voxels *v, const HeroShape *h, Pos *out,
+   voxel (marche) ou un niveau au-dessus (saut), w = 16 k. step : l'écart
+   entre deux positions essayées en u et en v ; 1 : toutes les positions
+   (le convertisseur), 4 : u = 4 m + 2, v = 4 n + 2 (les références lentes
+   des tests). Renvoie le nombre de positions ; 'out' en reçoit au plus
+   max ; 'walk' (si non nul) dit pour chacune si elle est posée. */
+int positions_list(const Voxels *v, const HeroShape *h, int step, Pos *out,
                    uint8_t *walk, int max);
 
 /* Le héros et son ombre, posés à une même position. L'ombre : une boîte

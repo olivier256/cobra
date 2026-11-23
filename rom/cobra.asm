@@ -11,8 +11,8 @@
 ;   assombri, sauf sous l'ombre du héros.
 ; - Le héros : un sprite de 2 x 4 tiles (ligne 2), dirigé à la croix, saut
 ;   avec A, B ou C. Sa priorité vient de la table du convertisseur
-;   (posinfo.bin) : basse si le plan A qui le recouvre est devant lui,
-;   haute s'il est derrière.
+;   (posinfo.bin, à chaque unité) : basse si le plan A qui le recouvre est
+;   devant lui, haute s'il est derrière.
 ; - Son ombre : un sprite de 2 x 1 tiles, couleur 15 de la ligne 3
 ;   (l'opérateur d'ombre), posée sur le sol sous lui.
 ; - Les masques : quand le plan A qui recouvre le héros (ou son ombre) est
@@ -76,8 +76,8 @@ padNow		RS.W	1		; boutons enfoncés (1 = enfoncé) : SACBRLDU
 padPrev		RS.W	1
 camX		RS.W	1
 camY		RS.W	1
-heroInfo	RS.W	1		; posinfo du héros et de l'ombre
-shadowInfo	RS.W	1
+heroInfo	RS.L	1		; réglages (posent.bin) du héros et de l'ombre
+shadowInfo	RS.L	1
 sprCount	RS.W	1		; entrées dans sprBuf
 sprBuf		RS.B	8*(2*MAX_MASKS+2)	; la table des sprites
 vblank		RS.B	1		; mis à 1 par la V_INT
@@ -458,24 +458,24 @@ UPDATE_VIEW:
 	MOVE.W	#IMG_H-224,D7
 @cy1	MOVE.W	D7,(camY).L
 
-	; Les positions du héros et de l'ombre dans posinfo.bin
+	; Les réglages du héros et de l'ombre (table des positions)
 	MOVE.W	(heroW).L,D2
 	BSR	LOOKUP
-	MOVE.W	D0,(heroInfo).L
-	MOVE.W	#$FFFF,D0
+	MOVE.L	D0,(heroInfo).L
+	MOVEQ	#-1,D0
 	MOVE.W	(shadowW).L,D2
 	BMI.S	@noinfo
 	BSR	LOOKUP
-@noinfo	MOVE.W	D0,(shadowInfo).L
+@noinfo	MOVE.L	D0,(shadowInfo).L
 
 	; La liste des sprites : les masques d'abord (devant), puis le héros,
 	; puis l'ombre
 	LEA	(sprBuf).L,A0
 	CLR.W	(sprCount).L
-	MOVE.W	(heroInfo).L,D0
+	MOVE.L	(heroInfo).L,D0
 	BSR	EMIT_MASKS
-	MOVE.W	(shadowInfo).L,D0
-	CMP.W	(heroInfo).L,D0
+	MOVE.L	(shadowInfo).L,D0
+	CMP.L	(heroInfo).L,D0
 	BEQ.S	@same
 	BSR	EMIT_MASKS
 @same
@@ -488,7 +488,7 @@ UPDATE_VIEW:
 	MOVE.W	D3,(A0)+		; y
 	MOVE.W	#$0700,(A0)+		; 2 x 4 (le lien est mis plus bas)
 	MOVE.W	#$4000|TILE_HERO,D3	; ligne 2
-	MOVE.W	(heroInfo).L,D0
+	MOVE.L	(heroInfo).L,D0
 	BSR	HIGH_BIT
 	OR.W	D0,D3
 	MOVE.W	D3,(A0)+
@@ -508,7 +508,7 @@ UPDATE_VIEW:
 	MOVE.W	D3,(A0)+
 	MOVE.W	#$0400,(A0)+		; 2 x 1
 	MOVE.W	#$6000|TILE_SHADOW,D3	; ligne 3
-	MOVE.W	(shadowInfo).L,D0
+	MOVE.L	(shadowInfo).L,D0
 	BSR	HIGH_BIT
 	OR.W	D0,D3
 	MOVE.W	D3,(A0)+
@@ -531,23 +531,24 @@ UPDATE_VIEW:
 	ADDQ.W	#1,D1
 	BRA.S	@link
 
-; HIGH_BIT : D0 = $8000 si le mot de posinfo D0 demande la priorité haute
+; HIGH_BIT : D0.W = $8000 si le réglage D0.L demande la priorité haute
 HIGH_BIT:
-	CMPI.W	#$FFFF,D0
+	CMPI.L	#-1,D0
 	BEQ.S	@low
+	SWAP	D0
 	ANDI.W	#$8000,D0
 	RTS
 @low	MOVEQ	#0,D0
 	RTS
 
-; EMIT_MASKS : ajoute à la liste (A0, sprCount) les masques du mot de
-; posinfo D0. Garde D4-D7.
+; EMIT_MASKS : ajoute à la liste (A0, sprCount) les masques du réglage
+; D0.L. Garde D4-D7.
 EMIT_MASKS:
-	CMPI.W	#$FFFF,D0
+	CMPI.L	#-1,D0
 	BEQ.S	@out
-	ANDI.W	#$7FFF,D0
+	ANDI.L	#$00FFFFFF,D0
 	LEA	DATA_MASKS,A1
-	ADDA.W	D0,A1
+	ADDA.L	D0,A1
 	MOVE.W	(A1)+,D1		; nombre de masques
 	SUBQ.W	#1,D1
 	BMI.S	@out
@@ -572,8 +573,9 @@ EMIT_MASKS:
 	DBF	D1,@mask
 @out	RTS
 
-; LOOKUP : D0 = le mot de posinfo.bin pour (heroU, heroV, D2) ; $FFFF
-; hors de la table
+; LOOKUP : D0.L = le réglage (posent.bin) de la position (heroU, heroV,
+; D2) ; -1 hors de la table. La case de 4 x 4 unités dans posinfo.bin ;
+; si elle est détaillée, la position dans possub.bin.
 LOOKUP:
 	MOVEM.L	D1-D3/A1,-(SP)
 	MOVE.W	(heroU).L,D0
@@ -591,9 +593,26 @@ LOOKUP:
 	ADD.W	D0,D3
 	ADD.L	D3,D3
 	LEA	DATA_POSINFO,A1
-	MOVE.W	(A1,D3.L),D0
+	MOVE.W	(A1,D3.L),D0		; la case
+	BPL.S	@entry
+	ANDI.L	#$7FFF,D0		; détaillée : d x 16 + (v & 3) x 4 + (u & 3)
+	LSL.L	#4,D0
+	MOVE.W	(heroV).L,D1
+	ANDI.W	#3,D1
+	LSL.W	#2,D1
+	ADD.W	D1,D0
+	MOVE.W	(heroU).L,D1
+	ANDI.W	#3,D1
+	ADD.W	D1,D0
+	ADD.L	D0,D0
+	LEA	DATA_POSSUB,A1
+	MOVE.W	(A1,D0.L),D0
+@entry	ANDI.L	#$7FFF,D0		; le numéro du réglage
+	LSL.L	#2,D0
+	LEA	DATA_POSENT,A1
+	MOVE.L	(A1,D0.L),D0
 	BRA.S	@out
-@none	MOVE.W	#$FFFF,D0
+@none	MOVEQ	#-1,D0
 @out	MOVEM.L	(SP)+,D1-D3/A1
 	RTS
 
@@ -637,9 +656,15 @@ DATA_VOXELS:
 DATA_MASKS:
 	INCBIN	"build/data/masks.bin"
 	EVEN
+DATA_POSENT:
+	INCBIN	"build/data/posent.bin"
 DATA_POSINFO:
 	INCBIN	"build/data/posinfo.bin"
-	IF	*<$20000		; 128 Ko
+DATA_POSSUB:
+	INCBIN	"build/data/possub.bin"
+	IF	*<=$20000		; 128 Ko, sinon 256 Ko
 	DCB.B	$20000-*,$FF
+	ELSE
+	DCB.B	$40000-*,$FF
 	ENDIF
 ROM_END:

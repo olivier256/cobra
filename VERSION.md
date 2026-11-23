@@ -227,3 +227,88 @@ pour Musashi (avertissement de l'éditeur de liens du Mac).
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
 ```
+
+---
+
+La table des positions à l'unité
+
+**Ce que fait cette version** :
+- **Correction.** Le convertisseur calculait la priorité et les masques
+  tous les 4 unités (héros en u = 4 m + 2), et les tests plaçaient le héros
+  exactement là. En jeu, le héros avance d'une unité, et la ROM prenait le
+  réglage de la case de 4 x 4. Près d'un objet, ce réglage pouvait être
+  faux : héros caché à tort (la tête mangée), ombre posée sur un objet
+  devant elle.
+- **Positions à l'unité.** Le convertisseur remplit maintenant le plan A
+  et calcule priorité et masques pour toutes les positions entières :
+  124 304, au lieu de 7 704.
+- **Une table compacte.**
+  - `posinfo.bin` garde un mot par case de 4 x 4 unités. Il donne soit le
+    réglage commun aux 16 positions de la case, soit le numéro d'une case
+    détaillée.
+  - `possub.bin` contient les cases détaillées, à 16 mots chacune.
+  - `posent.bin` contient les réglages différents, à un long chacun
+    (priorité et adresse de la liste de masques).
+  - La ROM lit la table en deux temps. Elle fait maintenant 256 Ko.
+- **`positions_list`** prend un pas : 1 pour le convertisseur, 4 pour les
+  références lentes de `test_scene`.
+- **Tests (`test_rom`).**
+  - Le héros est posé à 1 500 positions quelconques, entières et tirées au
+    hasard avec une graine fixe, au lieu de positions sur la grille de 4.
+  - 120 sauts sont vérifiés image par image : l'ombre doit être juste à
+    chaque image, et les pixels faux du héros sont comptés.
+
+**Mesures** (zone de démo) :
+- **Positions quelconques**, mesurées sur le banc :
+
+  | | Avant | Après |
+  |---|---|---|
+  | Héros faux | 1,3 % des positions (11 sur 834, 416 pixels) | 0 sur 1 500 |
+  | Ombre fausse | 4,6 % des positions (38 sur 834, 137 pixels) | 0 sur 1 500 |
+
+- **Sauts**, sur 7 872 images :
+
+  | | Avant | Après |
+  |---|---|---|
+  | Ombre fausse | 432 images (1 800 pixels) | 0 |
+  | Héros faux | 190 images (3 902 pixels) | 83 images (848 pixels) |
+
+  Le héros en l'air reste faux à environ 1 % des images, quelques pixels à
+  chaque fois. La ROM prend la table à la hauteur 16 k la plus proche,
+  alors que le héros passe par toutes les hauteurs.
+- **Table des positions** : 504 réglages différents ; 2 044 cases
+  détaillées sur 32 640 (6,3 %). Elle occupe 65 280 + 65 408 + 2 016
+  octets, plus 501 listes de masques (16 708 octets).
+- **Positions** : 124 304, dont 62 352 posées. Parmi ces dernières :
+  priorité basse 56,2 %, haute 33,7 %, masquées 10,1 %. Masques : 7,4 en
+  moyenne par position masquée, 17 au plus, 3 au plus sur une rangée de
+  tiles, et au plus 7 sprites sur une même ligne pendant les tests.
+- **Plan A** : 26 115 pixels sur 101 888 (25,6 %).
+- **Tiles** : 222 pour le décor et 5 pour les masques, soit 227 en tout ;
+  la marge est de 1 155.
+- **Cycles par image** : 4 580 à 10 246, soit 3,6 à 8,0 % d'une image NTSC.
+- **BlastEm** : mêmes images que le banc, au pixel près, à deux positions
+  hors de la grille (contre la caisse, dans la colonnade) et au départ.
+
+Message de commit proposé :
+
+```
+La table des positions à l'unité
+
+Le héros avance d'une unité, mais la priorité et les masques étaient
+calculés tous les 4 unités : près des objets, il était caché à tort (la
+tête mangée) et l'ombre passait devant ce qui aurait dû la cacher.
+
+Le convertisseur calcule maintenant toutes les positions entières
+(124 304). La table est rangée par cases de 4 x 4 unités : un mot par
+case, détaillée en 16 mots quand ses positions diffèrent (6,3 % des
+cases) ; 133 Ko, ROM de 256 Ko.
+
+test_rom pose le héros à 1 500 positions quelconques (0 erreur, contre
+1,3 % pour le héros et 4,6 % pour l'ombre avant) et vérifie 120 sauts
+image par image : ombre juste ; héros en l'air faux à 1 % des images
+(la table ne connaît que les hauteurs 16 k).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01R9arX5VKsb6urMjsEiEwmU
+```

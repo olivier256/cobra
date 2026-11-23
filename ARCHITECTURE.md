@@ -81,10 +81,11 @@ sprites (16 x 32 pour le héros, 16 x 8 pour l'ombre), et son voxel est
 devant la boîte correspondante (boîtes séparées le long d'un axe vers
 l'œil ; vérifié contre un lancer de rayons). La boîte de l'ombre est plate,
 de la même empreinte que le héros (± 4 unités), posée au sol. Positions :
-tous les 4 unités, à chaque niveau, posées sur un voxel ou un niveau
-au-dessus (saut).
+toutes les positions entières (u et v à l'unité), à chaque niveau, posées
+sur un voxel ou un niveau au-dessus (saut).
 
-Pour chaque position, `posinfo.bin` donne la priorité des deux sprites :
+Pour chaque position, la table des positions donne la priorité des deux
+sprites :
 basse si les pixels du plan A qui les recouvrent sont tous devant eux,
 haute s'ils sont tous derrière. S'il y en a des deux sortes (le héros entre
 deux colonnes), un seul bit ne peut pas faire juste : la position est
@@ -98,6 +99,15 @@ met devant le plan A. Un masque reprend le tile du plan A, ou un tile
 aussi des pixels derrière le héros. Retirer la priorité des tiles derrière
 le héros (une astuce possible sans le mode ombre et surbrillance) les
 assombrirait : exclu.
+
+La table des positions est à l'unité (le héros avance d'une unité à la
+fois ; avec une table tous les 4 unités, il était caché à tort près des
+objets). Elle est rangée par cases de 4 x 4 unités : un mot par case, qui
+donne le réglage (priorité et liste de masques) commun à ses 16 positions,
+ou renvoie à une case détaillée (16 mots) quand elles diffèrent, ce qui
+n'arrive que près des objets (6 % des cases dans la démo). En l'air, la
+ROM prend la table à la hauteur 16 k la plus proche : quelques pixels
+faux pendant les sauts (mesurés par test_rom).
 
 ## La VRAM
 
@@ -118,9 +128,10 @@ son clone libre). Au démarrage, tout est copié dans le VDP par le
 processeur (pas encore de DMA). À chaque image : la V_INT écrit la table
 des sprites et le défilement ; la boucle principale lit la manette, déplace
 le héros (collisions contre les voxels, saut), cherche le sol sous lui pour
-l'ombre, lit la priorité et les masques des deux sprites dans
-`posinfo.bin` (au saut, le héros à sa hauteur, l'ombre au sol), place la
-caméra et bâtit la liste des sprites : les masques, le héros, l'ombre.
+l'ombre, lit la priorité et les masques des deux sprites dans la table des
+positions (`posinfo.bin`, `possub.bin`, `posent.bin` ; au saut, le héros à
+sa hauteur, l'ombre au sol), place la caméra et bâtit la liste des
+sprites : les masques, le héros, l'ombre.
 
 ## Le banc sans affichage
 
